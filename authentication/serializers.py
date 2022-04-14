@@ -5,7 +5,7 @@ from rest_framework import serializers
 from django.utils.translation import gettext_lazy as _
 from rest_framework.exceptions import ValidationError
 
-from authentication.models import User, OTP
+from authentication.models import User, OTP, Token
 from authentication.tokens import AccessToken
 
 
@@ -73,7 +73,7 @@ class ConfirmTokenSerializer(serializers.Serializer):
     phone_number = serializers.CharField(
         validators=[phone_regex], max_length=17, required=False)
 
-    token = TokenField(min_length=settings.AUTHENTIATION['OTP_LENGTH'], max_length=settings.AUTHENTIATION['OTP_LENGTH'])
+    token = TokenField(min_length=settings.AUTHENTICATION['OTP_LENGTH'], max_length=settings.AUTHENTICATION['OTP_LENGTH'])
     user = UserSerializer(many=False, read_only=True)
 
 
@@ -105,18 +105,18 @@ class ConfirmTokenSerializer(serializers.Serializer):
             token.is_active = False
             token.save()
 
-            attrs['user'] = user
+            attrs['user'] = UserSerializer(user).data
 
 
             access_token = AccessToken.for_user(user)
-            # refresh_token = (Token.objects.
-            #                  create(user=user,
-            #                         exp_date=timezone.now() +
-            #                                  api_settings.REFRESH_TOKEN_LIFETIME))
+            refresh_token = (Token.objects.
+                             create(user=user,
+                                    exp_date=timezone.now() +
+                                             settings.AUTHENTICATION['REFRESH_TOKEN_LIFETIME']))
 
             attrs['access_tok'] = str(access_token)
-            # attrs['refresh_tok'] = refresh_token.session
-            # attrs['refresh_tok_exp'] = refresh_token.exp_date
+            attrs['refresh_tok'] = refresh_token.tokenid
+            attrs['refresh_tok_exp'] = refresh_token.exp_date
             attrs['access_tok_exp'] = access_token.get_exp()
 
             return attrs
@@ -130,3 +130,34 @@ class ConfirmTokenSerializer(serializers.Serializer):
         except ValidationError:
             msg = _('Invalid ailas parameters provided.')
             raise serializers.ValidationError(msg)
+
+
+
+
+class TokenRefreshSerializer(serializers.Serializer):
+    refresh = serializers.CharField()
+    user_id = serializers.CharField()
+    access = serializers.ReadOnlyField()
+
+    def validate(self, attrs):
+        data = {}
+        print("Refreshing token")
+        try:
+            ref = Token.objects.get(
+                tokenid=attrs['refresh'],
+                user=User.objects.get(phone_number=attrs['user_id']))
+            if ref.exp_date < timezone.now():
+                msg = _("Refresh token has expired")
+                raise serializers.ValidationError(msg)
+            user = User.objects.get(pk=ref.user.id)
+            tok = AccessToken.for_user(user)  # Create JWT
+            data['access_tok'] = str(tok)
+            data['access_tok_exp'] = tok.get_exp()
+        except Token.DoesNotExist:
+            msg = _('Invalid token')
+            raise serializers.ValidationError(msg)
+        except User.DoesNotExist:
+            msg = _('Invalid token')
+            raise serializers.ValidationError(msg)
+
+        return data
