@@ -1,7 +1,12 @@
+from django.conf import settings
 from django.core.validators import RegexValidator
+from django.utils import timezone
 from rest_framework import serializers
 from django.utils.translation import gettext_lazy as _
+from rest_framework.exceptions import ValidationError
+
 from authentication.models import User, OTP
+from authentication.tokens import AccessToken
 
 
 class TokenField(serializers.CharField):
@@ -60,3 +65,68 @@ class MobileAuthSerializer(serializers.Serializer):
             raise serializers.ValidationError(msg)
 
         return attrs
+
+
+class ConfirmTokenSerializer(serializers.Serializer):
+    phone_regex = RegexValidator(
+        regex=r'^\d{10,16}$', message=_("Invalid Mobile Number"))
+    phone_number = serializers.CharField(
+        validators=[phone_regex], max_length=17, required=False)
+
+    token = TokenField(min_length=settings.AUTHENTIATION['OTP_LENGTH'], max_length=settings.AUTHENTIATION['OTP_LENGTH'])
+    user = UserSerializer(many=False, read_only=True)
+
+
+    def validate(self, attrs):
+        try:
+            callback_token = attrs.get('token', None)
+
+            user = User.objects.get(phone_number=attrs['phone_number'])
+
+            token = OTP.objects.get(
+                user=user,
+                value=callback_token,
+                is_active=True,
+            )
+            if token.exp_date < timezone.now():
+                token.is_active = False
+                token.save()
+                msg = _('Invalid Token')
+                raise serializers.ValidationError(msg)
+
+            if not user.is_active:
+                msg = _('User account is disabled')
+                raise serializers.ValidationError(msg)
+
+            if user.phone_number_verified is False:
+                user.phone_number_verified = True
+                user.save()
+
+            token.is_active = False
+            token.save()
+
+            attrs['user'] = user
+
+
+            access_token = AccessToken.for_user(user)
+            # refresh_token = (Token.objects.
+            #                  create(user=user,
+            #                         exp_date=timezone.now() +
+            #                                  api_settings.REFRESH_TOKEN_LIFETIME))
+
+            attrs['access_tok'] = str(access_token)
+            # attrs['refresh_tok'] = refresh_token.session
+            # attrs['refresh_tok_exp'] = refresh_token.exp_date
+            attrs['access_tok_exp'] = access_token.get_exp()
+
+            return attrs
+
+        except OTP.DoesNotExist:
+            msg = _('Invalid alias parameters provided.')
+            raise serializers.ValidationError(msg)
+        except User.DoesNotExist:
+            msg = _('Invalid user alias parameters provided')
+            raise serializers.ValidationError(msg)
+        except ValidationError:
+            msg = _('Invalid ailas parameters provided.')
+            raise serializers.ValidationError(msg)
