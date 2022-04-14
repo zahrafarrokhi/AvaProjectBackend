@@ -11,6 +11,9 @@ def generate_numeric_token():
     return get_random_string(length=settings.AUTHENTICATION['OTP_LENGTH'],
                              allowed_chars=string.digits)
 
+def generate_uuid():
+    tok = uuid.uuid4().hex.upper()
+    return tok
 
 # Create your models here.
 class UserManager(BaseUserManager):
@@ -103,3 +106,12 @@ class OTP(models.Model):
     def __str__(self):
         return str(f"{self.value} sent by {str(self.type)} to "
                    f"{self.user.phone_number}")
+
+class Token(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    exp_date = models.DateTimeField(blank=False, null=False)
+    tokenid = models.CharField(default=generate_uuid, max_length=128)
+    device_info = models.JSONField(blank=True, null=True, default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
